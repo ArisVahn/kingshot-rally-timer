@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kingshot Rally Timer (Local)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .sortable-ghost {
+            opacity: 0.4;
+            background: #4a5568;
+        }
+        .sortable-chosen {
+            background: #2d3748;
+        }
+        .modal {
+            transition: opacity 0.25s ease;
+        }
+        .modal-content {
+            transition: transform 0.25s ease;
+        }
+    </style>
+</head>
+<body class="h-full text-gray-100">
+
+    <script>
+        let roster = [];
+        let rally = [];
+        let timers = {};
+        let audioContext;
+        
+        let playerForm, playerNameInput, marchTimeInput, rosterList, rallyList;
+        let hitGapInput, calculateButton, timerView, plannerView, timerList;
+        let startMasterButton, newRallyButton, clearRallyButton;
+
+        function initApp() {
+            playerForm = document.getElementById('playerForm');
+            playerNameInput = document.getElementById('playerName');
+            marchTimeInput = document.getElementById('marchTime');
+            rosterList = document.getElementById('rosterList');
+            rallyList = document.getElementById('rallyList');
+            hitGapInput = document.getElementById('hitGap');
+            calculateButton = document.getElementById('calculateButton');
+            timerView = document.getElementById('timerView');
+            plannerView = document.getElementById('plannerView');
+            timerList = document.getElementById('timerList');
+            startMasterButton = document.getElementById('startMasterButton');
+            newRallyButton = document.getElementById('newRallyButton');
+            clearRallyButton = document.getElementById('clearRallyButton');
+
+            loadRoster();
+            renderRoster();
+            setupEventListeners();
+            
+            Sortable.create(rallyList, {
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                chosenClass: 'sortable-chosen',
+                onEnd: () => {
+                    const orderedIds = Array.from(rallyList.children).map(li => li.dataset.id);
+                    rally = orderedIds.map(id => rally.find(p => p.id === id)).filter(Boolean);
+                    renderRally();
+                }
+            });
+        }
+        
+        function loadRoster() {
+            const savedRoster = localStorage.getItem('kingshotRoster');
+            if (savedRoster) {
+                roster = JSON.parse(savedRoster);
+            }
+        }
+        
+        function saveRoster() {
+            localStorage.setItem('kingshotRoster', JSON.stringify(roster));
+        }
+
+        function handleAddPlayer(e) {
+            e.preventDefault();
+            const name = playerNameInput.value.trim();
+            const marchTime = parseInt(marchTimeInput.value, 10);
+
+            if (!name || isNaN(marchTime) || marchTime <= 0) {
+                showModal('Invalid Input', 'Please enter a valid name and a positive march time.');
+                return;
+            }
+
+            const newPlayer = {
+                id: `player-${Date.now()}`,
+                name,
+                marchTime
+            };
+            
+            roster.push(newPlayer);
+            saveRoster();
+            renderRoster();
+            
+            playerNameInput.value = '';
+            marchTimeInput.value = '';
+            playerNameInput.focus();
+        }
+
+        function deletePlayer(playerId) {
+            roster = roster.filter(p => p.id !== playerId);
+            saveRoster();
+            renderRoster();
+
+            const inRally = rally.find(p => p.id === playerId);
+            if (inRally) {
+                removeFromRally(playerId);
+            }
+        }
+
+        function renderRoster() {
+            rosterList.innerHTML = '';
+            if (roster.length === 0) {
+                rosterList.innerHTML = '<p class="text-gray-400 text-sm">No players added yet. Your roster will be saved in this browser.</p>';
+                return;
+            }
+            
+            roster.forEach(player => {
+                const li = document.createElement('li');
+                li.className = 'flex justify-between items-center p-3 bg-gray-700 rounded-lg shadow';
+                li.innerHTML = `
+                    <span class="font-medium">${player.name} - ${player.marchTime}s</span>
+                    <div class="flex gap-2">
+                        <button data-id="${player.id}" class="btn-add-to-rally bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm transition duration-150">Add to Rally</button>
+                        <button data-id="${player.id}" class="btn-delete-player bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-sm transition duration-150">X</button>
+                    </div>
+                `;
+                rosterList.appendChild(li);
+            });
+        }
+
+        function renderRally() {
+            rallyList.innerHTML = '';
+            if (rally.length === 0) {
+                rallyList.innerHTML = '<p class="text-gray-400 text-sm">Drag players here or use the "Add" button to set the hit order.</p>';
+                return;
+            }
+
+            rally.forEach((player, index) => {
+                const li = document.createElement('li');
+                li.className = 'flex justify-between items-center p-3 bg-gray-800 rounded-lg shadow cursor-move';
+                li.dataset.id = player.id;
+                li.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="text-lg font-bold text-blue-400">#${index + 1}</span>
+                        <span class="font-medium">${player.name} (${player.marchTime}s)</span>
+                    </div>
+                    <button data-id="${player.id}" class="btn-remove-from-rally text-red-400 hover:text-red-300 font-bold text-lg">&times;</button>
+                `;
+                rallyList.appendChild(li);
+            });
+        }
+
+        function addToRally(playerId) {
+            if (rally.find(p => p.id === playerId)) return;
+
+            const player = roster.find(p => p.id === playerId);
+            if (player) {
+                rally.push(player);
+                renderRally();
+            }
+        }
+
+        function removeFromRally(playerId) {
+            rally = rally.filter(p => p.id !== playerId);
+            renderRally();
+        }
+        
+        function clearRally() {
+            rally = [];
+            renderRally();
+        }
+
+        function calculateTimers() {
+            const hitGap = parseInt(hitGapInput.value, 10);
+            if (isNaN(hitGap) || hitGap < 0) {
+                showModal('Invalid Gap', 'Please enter a valid, positive hit gap (e.g., 0, 1, 2).');
+                return;
+            }
+
+            if (rally.length < 1) {
+                showModal('Empty Rally', 'Please add at least one player to the rally sequence.');
+                return;
+            }
+
+            const orderedIds = Array.from(rallyList.children)
+                                 .map(li => li.dataset.id)
+                                 .filter(id => id);
+            
+            if (orderedIds.length === 0 && rally.length > 0) {
+                orderedIds = rally.map(p => p.id);
+            } else if (orderedIds.length === 0 && rally.length === 0) {
+                 showModal('Empty Rally', 'Please add players to the rally sequence.');
+                return;
+            }
+
+            const rallyPlayers = orderedIds.map((id, index) => {
+                const player = rally.find(p => p.id === id);
+                return { ...player, hitOrder: index + 1 };
+            });
+
+            const RALLY_TIMER_DURATION = 300;
+            let earliestStartTime = Infinity;
+            
+            const playersWithTimes = rallyPlayers.map(player => {
+                const relativeHitTime = (player.hitOrder - 1) * hitGap;
+                const startTime = relativeHitTime - player.marchTime - RALLY_TIMER_DURATION;
+                if (startTime < earliestStartTime) {
+                    earliestStartTime = startTime;
+                }
+                return { ...player, startTime };
+            });
+
+            const finalTimerList = playersWithTimes.map(player => {
+                const countdownSeconds = player.startTime - earliestStartTime;
+                return { ...player, countdownSeconds };
+            });
+
+            finalTimerList.sort((a, b) => a.countdownSeconds - b.countdownSeconds);
+
+            renderTimers(finalTimerList);
+            plannerView.classList.add('hidden');
+            timerView.classList.remove('hidden');
+        }
+
+        function renderTimers(timerList) {
+            const listEl = document.getElementById('timerList');
+            listEl.innerHTML = '';
+            startMasterButton.disabled = false;
+            startMasterButton.textContent = 'START MASTER TIMER';
+
+            timerList.forEach(player => {
+                const li = document.createElement('li');
+                li.className = 'flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-gray-800 rounded-lg shadow gap-2';
+                li.id = `timer-row-${player.id}`;
+                
+                li.innerHTML = `
+                    <div class="flex-1">
+                        <span class="text-xl font-bold ${player.countdownSeconds === 0 ? 'text-green-400' : 'text-blue-300'}">${player.name}</span>
+                        <div class="text-sm text-gray-400">
+                            <span>Hit Order: #${player.hitOrder}</span> |
+                            <span>March: ${player.marchTime}s</span>
+                        </div>
+                    </div>
+                    <div id="countdown-${player.id}" data-time="${player.countdownSeconds}" class="text-3xl font-bold text-yellow-400 w-full sm:w-auto text-left sm:text-right">
+                        ${formatTime(player.countdownSeconds)}
+                    </div>
+                `;
+                listEl.appendChild(li);
+            });
+        }
+        
+        function formatTime(totalSeconds) {
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        function startMasterTimer() {
+            startMasterButton.disabled = true;
+            startMasterButton.textContent = 'TIMERS RUNNING...';
+            
+            Object.values(timers).forEach(clearInterval);
+            timers = {};
+            
+            initAudio();
+
+            const countdownElements = document.querySelectorAll('[id^="countdown-"]');
+            
+            countdownElements.forEach(el => {
+                let remaining = parseInt(el.dataset.time, 10);
+                
+                const playerId = el.id.replace('countdown-', '');
+                
+                const row = document.getElementById(`timer-row-${playerId}`);
+                
+                if (remaining === 0) {
+                    el.textContent = "START NOW!";
+                    el.classList.remove('text-yellow-400');
+                    el.classList.add('text-green-400');
+                    if (row) row.classList.add('ring-2', 'ring-green-500');
+                    playBeep(800, 0.5);
+                    return;
+                }
+
+                timers[playerId] = setInterval(() => {
+                    remaining--;
+                    el.textContent = formatTime(remaining);
+
+                    if (remaining <= 3 && remaining > 0) {
+                        playBeep(440, 0.2);
+                    }
+
+                    if (remaining <= 0) {
+                        clearInterval(timers[playerId]);
+                        el.textContent = "START NOW!";
+                        el.classList.remove('text-yellow-400');
+                        el.classList.add('text-green-400');
+                        if (row) row.classList.add('ring-2', 'ring-green-500');
+                        playBeep(800, 0.5);
+                    }
+                }, 1000);
+            });
+        }
+
+        function goBackToPlanner() {
+            Object.values(timers).forEach(clearInterval);
+            timers = {};
+            
+            timerView.classList.add('hidden');
+            plannerView.classList.remove('hidden');
+        }
+
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playBeep(frequency, duration) {
+            if (!audioContext) return;
+            try {
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + 0.01);
+                
+                oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+                oscillator.type = 'sine';
+                
+                oscillator.start(audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + duration);
+                oscillator.stop(audioContext.currentTime + duration);
+            } catch (e) {
+                console.error("Error playing sound: ", e);
+            }
+        }
+        
+        function showModal(title, message) {
+            const modal = document.getElementById('modal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.textContent = title;
+            modalBody.textContent = message;
+            
+            modal.classList.remove('hidden', 'opacity-0');
+            modal.classList.add('opacity-100');
+            document.getElementById('modalContent').classList.add('scale-100');
+            document.getElementById('modalContent').classList.remove('scale-95');
+        }
+
+        function hideModal() {
+            const modal = document.getElementById('modal');
+            modal.classList.add('opacity-0');
+            modal.classList.remove('opacity-100');
+            document.getElementById('modalContent').classList.add('scale-95');
+            document.getElementById('modalContent').classList.remove('scale-100');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 250);
+        }
+
+        function setupEventListeners() {
+            playerForm.addEventListener('submit', handleAddPlayer);
+            
+            rosterList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('btn-delete-player')) {
+                    deletePlayer(e.target.dataset.id);
+                }
+                if (e.target.classList.contains('btn-add-to-rally')) {
+                    addToRally(e.target.dataset.id);
+                }
+            });
+            
+            rallyList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('btn-remove-from-rally')) {
+                    removeFromRally(e.target.dataset.id);
+                }
+            });
+            
+            calculateButton.addEventListener('click', calculateTimers);
+            startMasterButton.addEventListener('click', startMasterTimer);
+            newRallyButton.addEventListener('click', goBackToPlanner);
+            clearRallyButton.addEventListener('click', clearRally);
+            document.getElementById('modalCloseBtn').addEventListener('click', hideModal);
+        }
+
+        window.addEventListener('DOMContentLoaded', initApp);
+
+    </script>
+
+    <div class="container mx-auto max-w-7xl p-4 lg:p-8">
+        <header class="mb-8">
+            <h1 class="text-4xl font-bold text-white">Kingshot Rally Timer</h1>
+            <p class="text-lg text-gray-400">Coordinate your Castle Battle marches for perfect hits.</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg">
+                <h2 class="text-2xl font-semibold mb-4 text-white">Player Roster</h2>
+                <p class="text-sm text-gray-400 mb-4">Add your players here. This list will be saved in your browser.</p>
+                
+                <form id="playerForm" class="flex flex-col sm:flex-row gap-3 mb-6">
+                    <input type="text" id="playerName" placeholder="Player Name" class="flex-grow bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                    <input type="number" id="marchTime" placeholder="March Time (s)" class="w-full sm:w-32 bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" required min="1">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2 rounded-md shadow transition duration-150">Add Player</button>
+                </form>
+
+                <h3 class="text-lg font-semibold text-gray-300 mb-2">Rally Starters & March Time</h3>
+                <ul id="rosterList" class="space-y-3 max-h-96 overflow-y-auto pr-2">
+                </ul>
+            </div>
+
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg">
+                
+                <div id="plannerView">
+                    <h2 class="text-2xl font-semibold mb-4 text-white">Rally Planner</h2>
+                    
+                    <div class="mb-4">
+                        <label for="hitGap" class="block text-sm font-medium text-gray-300 mb-1">Hit Gap (seconds)</label>
+                        <input type="number" id="hitGap" value="1" min="0" class="w-24 bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">Rally Sequence (Hit Order)</h3>
+                    <p class="text-sm text-gray-400 mb-4">Add players from the roster and drag them to set the hit order.</p>
+
+                    <ul id="rallyList" class="space-y-3 mb-6 min-h-[100px] bg-gray-900 p-4 rounded-lg">
+                    </ul>
+                    
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button id="calculateButton" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold px-6 py-3 rounded-md shadow-lg transition duration-150 text-lg">Calculate Timers</button>
+                        <button id="clearRallyButton" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-3 rounded-md transition duration-150">Clear Rally</button>
+                    </div>
+                </div>
+
+                <div id="timerView" class="hidden">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-white">Rally Timers</h2>
+                        <button id="newRallyButton" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-2 rounded-md transition duration-150">New Rally</button>
+                    </div>
+                    
+                    <p class="text-sm text-gray-400 mb-4">Timers show when each player must **START THEIR 5-MINUTE RALLY**.</p>
+                    
+                    <button id="startMasterButton" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold px-6 py-4 rounded-md shadow-lg transition duration-150 text-2xl mb-6 disabled:opacity-50 disabled:cursor-not-allowed">START MASTER TIMER</button>
+                    
+                    <ul id="timerList" class="space-y-4">
+                    </ul>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    
+    <div id="modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-75 hidden opacity-0 modal">
+        <div id="modalContent" class="modal-content bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 transform scale-95">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modalTitle" class="text-xl font-semibold text-white">Modal Title</h3>
+                <button id="modalCloseBtn" class="text-gray-400 hover:text-white text-2xl font-bold">&times;</button>
+            </div>
+            <p id="modalBody" class="text-gray-300">Modal message goes here.</p>
+        </div>
+    </div>
+
+</body>
+</html>
